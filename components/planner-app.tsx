@@ -26,10 +26,10 @@ export default function PlannerApp() {
   const refreshList = useCallback(async () => {
     try { setBundles(await repository.listPlans()); } catch (err) { setError(err instanceof Error ? err.message : "계획을 불러오지 못했습니다."); }
   }, []);
-  const openToken = useCallback(async (token: string) => {
-    setLoading(true); setError("");
+  const openToken = useCallback(async (token: string, showLoading = true) => {
+    if (showLoading) setLoading(true); setError("");
     try { setCurrent(await repository.getBundle(token)); } catch (err) { setError(err instanceof Error ? err.message : "계획을 찾지 못했습니다."); }
-    finally { setLoading(false); }
+    finally { if (showLoading) setLoading(false); }
   }, []);
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get("plan");
@@ -37,7 +37,7 @@ export default function PlannerApp() {
   }, [openToken, refreshList]);
   useEffect(() => {
     if (!current) return;
-    return repository.subscribe(current.plan.id, () => openToken(current.plan.shareToken));
+    return repository.subscribe(current.plan.id, () => openToken(current.plan.shareToken, false));
   }, [current?.plan.id, current?.plan.shareToken, openToken]);
 
   const navigate = (bundle: PlanBundle | null) => {
@@ -49,23 +49,34 @@ export default function PlannerApp() {
   };
 
   if (loading) return <main className="shell loading">이사 계획을 불러오는 중입니다…</main>;
-  if (current) return <PlanView bundle={current} onBack={() => navigate(null)} onRefresh={() => openToken(current.plan.shareToken)} />;
+  if (current) return <PlanView bundle={current} onBack={() => navigate(null)} onRefresh={() => openToken(current.plan.shareToken, false)} />;
   return <Dashboard bundles={bundles} error={error} onOpen={(bundle) => navigate(bundle)} onCreated={(bundle) => { setBundles((all) => [bundle, ...all]); navigate(bundle); }} />;
 }
 
 function Dashboard({ bundles, error, onOpen, onCreated }: { bundles: PlanBundle[]; error: string; onOpen: (bundle: PlanBundle) => void; onCreated: (bundle: PlanBundle) => void }) {
   const [showForm, setShowForm] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
   const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); const data = new FormData(event.currentTarget);
-    const bundle = await repository.createPlan({ name: String(data.get("name")), moveDate: String(data.get("moveDate")), origin: String(data.get("origin")), destination: String(data.get("destination")) });
-    onCreated(bundle);
+    event.preventDefault();
+    if (creating) return;
+    const data = new FormData(event.currentTarget);
+    try {
+      setCreating(true); setCreateError("");
+      const bundle = await repository.createPlan({ name: String(data.get("name")), moveDate: String(data.get("moveDate")), origin: String(data.get("origin")), destination: String(data.get("destination")) });
+      onCreated(bundle);
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "계획을 만들지 못했습니다.");
+    } finally {
+      setCreating(false);
+    }
   };
   return <main className="shell">
     <header className="hero"><div><p className="eyebrow">함께 준비하는 이사</p><h1>이사 플래너</h1><p>이사일을 정하고, 모두의 준비를 한곳에서 확인하세요.</p></div><button className="primary" onClick={() => setShowForm(true)}>+ 새 이사 계획</button></header>
     {error && <p className="error">{error}</p>}
     <section className="card-grid">{bundles.map((bundle) => <PlanCard key={bundle.plan.id} bundle={bundle} onClick={() => onOpen(bundle)} />)}</section>
     {!bundles.length && <section className="empty"><span>📦</span><h2>첫 이사 계획을 만들어 보세요</h2><p>D-day를 기준으로 필요한 준비 항목을 자동으로 채워드립니다.</p></section>}
-    {showForm && <Modal title="새 이사 계획" onClose={() => setShowForm(false)}><form className="form" onSubmit={submit}><label>계획 이름<input name="name" required placeholder="예: 성수동 새집 이사" /></label><label>이사 D-day<input name="moveDate" type="date" required /></label><label>출발지 <span>(선택)</span><input name="origin" placeholder="예: 마포구 연남동" /></label><label>도착지 <span>(선택)</span><input name="destination" placeholder="예: 성동구 성수동" /></label><button className="primary" type="submit">계획 만들기</button></form></Modal>}
+    {showForm && <Modal title="새 이사 계획" onClose={() => { if (!creating) setShowForm(false); }}><form className="form" onSubmit={submit}><label>계획 이름<input name="name" required disabled={creating} placeholder="예: 성수동 새집 이사" /></label><label>이사 D-day<input name="moveDate" type="date" required disabled={creating} /></label><label>출발지 <span>(선택)</span><input name="origin" disabled={creating} placeholder="예: 마포구 연남동" /></label><label>도착지 <span>(선택)</span><input name="destination" disabled={creating} placeholder="예: 성동구 성수동" /></label>{createError && <p className="error">{createError}</p>}<button className="primary" type="submit" disabled={creating}>{creating ? "계획 만드는 중…" : "계획 만들기"}</button></form></Modal>}
   </main>;
 }
 
