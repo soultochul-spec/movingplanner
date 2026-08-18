@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireServerSupabase } from "../../../lib/server-supabase";
+import { userForRequest } from "../../../lib/server-auth";
 
 export async function POST(request: NextRequest) {
   try {
+    if (!await userForRequest(request)) return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
     const { token, member } = await request.json(); const db = requireServerSupabase();
     const { data: plan } = await db.from("move_plans").select("id").eq("share_token", token).eq("id", member.planId).single();
     if (!plan) return NextResponse.json({ error: "권한이 없습니다." }, { status: 403 });

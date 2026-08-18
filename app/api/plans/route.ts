@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireServerSupabase } from "../../../lib/server-supabase";
+import { userForRequest } from "../../../lib/server-auth";
 
 async function planForToken(token: string) {
   const db = requireServerSupabase();
@@ -10,11 +11,19 @@ async function planForToken(token: string) {
 
 export async function GET(request: NextRequest) {
   try {
+    const user = await userForRequest(request);
+    if (!user) return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
     const token = request.nextUrl.searchParams.get("token");
-    if (!token) return NextResponse.json({ error: "초대 링크가 필요합니다." }, { status: 400 });
+    if (!token) {
+      const db = requireServerSupabase();
+      const { data, error } = await db.from("move_plans").select("*,tasks(*),plan_members(*)").eq("owner_id", user.id).order("created_at", { ascending: false });
+      if (error) throw error;
+      return NextResponse.json({ plans: (data || []).map(({ tasks, plan_members, ...plan }) => ({ plan, tasks: (tasks || []).sort((a: any, b: any) => a.relative_days - b.relative_days), members: (plan_members || []).sort((a: any, b: any) => a.created_at.localeCompare(b.created_at)) })) });
+    }
     const plan = await planForToken(token);
     if (!plan) return NextResponse.json({ error: "계획을 찾을 수 없습니다." }, { status: 404 });
     const db = requireServerSupabase();
+    if (!plan.owner_id) { const { error } = await db.from("move_plans").update({ owner_id: user.id }).eq("id", plan.id).is("owner_id", null); if (error) throw error; plan.owner_id = user.id; }
     const [tasks, members] = await Promise.all([db.from("tasks").select("*").eq("plan_id", plan.id).order("relative_days"), db.from("plan_members").select("*").eq("plan_id", plan.id).order("created_at")]);
     if (tasks.error || members.error) throw tasks.error || members.error;
     return NextResponse.json({ plan, tasks: tasks.data, members: members.data });
@@ -23,9 +32,11 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await userForRequest(request);
+    if (!user) return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
     const { plan, tasks } = await request.json();
     const db = requireServerSupabase();
-    const { error: planError } = await db.from("move_plans").insert({ id: plan.id, name: plan.name, move_date: plan.moveDate, origin: plan.origin || null, destination: plan.destination || null, share_token: plan.shareToken });
+    const { error: planError } = await db.from("move_plans").insert({ id: plan.id, owner_id: user.id, name: plan.name, move_date: plan.moveDate, origin: plan.origin || null, destination: plan.destination || null, share_token: plan.shareToken });
     if (planError) throw planError;
     const { error: taskError } = await db.from("tasks").insert(tasks.map((task: any) => ({ id: task.id, plan_id: task.planId, title: task.title, description: task.description, category: task.category, relative_days: task.relativeDays, priority: task.priority, assignee_id: task.assigneeId || null, completed: task.completed, completed_by: task.completedBy || null, completed_at: task.completedAt || null, note: task.note || null })));
     if (taskError) throw taskError;
@@ -35,6 +46,8 @@ export async function POST(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
+    const user = await userForRequest(request);
+    if (!user) return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
     const { token, plan } = await request.json(); const found = await planForToken(token);
     if (!found || found.id !== plan.id) return NextResponse.json({ error: "권한이 없습니다." }, { status: 403 });
     const { error } = await requireServerSupabase().from("move_plans").update({ name: plan.name, move_date: plan.moveDate, origin: plan.origin || null, destination: plan.destination || null }).eq("id", plan.id);

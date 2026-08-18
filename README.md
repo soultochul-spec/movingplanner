@@ -20,11 +20,15 @@ pnpm dev
 SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 NEXT_PUBLIC_ENABLE_COLLABORATION=true
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
 ADMIN_PASSWORD=CHANGE_TO_A_STRONG_PASSWORD
 ```
 
 3. Vercel의 Production 환경 변수에도 같은 값을 등록한 뒤 배포합니다. `SUPABASE_SERVICE_ROLE_KEY`는 서버 전용 비밀값이므로 절대 `NEXT_PUBLIC_` 접두사를 붙이거나 Git에 커밋하지 않습니다.
 4. 배포 주소로 접속해 생성한 계획의 `초대 링크 복사`를 전달합니다. 링크 토큰을 가진 사람만 서버 API를 통해 그 계획을 조회·편집할 수 있습니다. 동기화는 4초 간격으로 반영됩니다.
+
+5. 로그인 기반 기기 간 동기화를 사용하려면 [`supabase/auth-migration.sql`](./supabase/auth-migration.sql)을 실행하고 Supabase Authentication의 URL Configuration에 배포 주소를 등록합니다. Google 로그인은 Supabase의 Google provider도 활성화해야 합니다.
 
 > v1은 링크를 아는 모든 사람이 편집하는 모델입니다. 링크를 받은 사람은 편집할 수 있으므로, 민감한 개인정보는 입력하지 마세요.
 

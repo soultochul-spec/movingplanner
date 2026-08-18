@@ -1,5 +1,6 @@
 create table public.move_plans (
   id uuid primary key,
+  owner_id uuid references auth.users(id) on delete cascade,
   name text not null,
   move_date date not null,
   origin text,
@@ -40,3 +41,5 @@ alter table public.tasks enable row level security;
 -- 브라우저는 테이블에 직접 접근하지 않습니다. 초대 토큰 검증은 Next.js 서버 API가
 -- 수행하고, 서버의 service_role만 데이터에 접근합니다.
 revoke all on public.move_plans, public.plan_members, public.tasks from anon, authenticated;
+
+create index move_plans_owner_id_idx on public.move_plans(owner_id);

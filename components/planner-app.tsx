@@ -4,6 +4,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { dueDate, formatDate } from "../lib/template";
 import { repository } from "../lib/repository";
 import { isCollaborationEnabled } from "../lib/collaboration";
+import { clientSupabase } from "../lib/client-supabase";
+import type { User } from "@supabase/supabase-js";
 import type { Category, Member, Plan, PlanBundle, Priority, Task } from "../lib/types";
 
 const categories: Category[] = ["행정", "업체/예약", "짐 정리", "공과금", "계약/정산", "입주"];
@@ -18,10 +20,19 @@ const relativeText = (days: number) => days === 0 ? "D-day" : days > 0 ? `D+${da
 const dDay = (date: string) => Math.round((new Date(`${date}T12:00:00+09:00`).getTime() - new Date().setHours(0, 0, 0, 0)) / 86_400_000);
 
 export default function PlannerApp() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(!isCollaborationEnabled);
   const [bundles, setBundles] = useState<PlanBundle[]>([]);
   const [current, setCurrent] = useState<PlanBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!isCollaborationEnabled || !clientSupabase) { setAuthReady(true); return; }
+    clientSupabase.auth.getUser().then(({ data }) => { setUser(data.user); setAuthReady(true); });
+    const { data } = clientSupabase.auth.onAuthStateChange((_event, session) => { setUser(session?.user || null); setAuthReady(true); });
+    return () => data.subscription.unsubscribe();
+  }, []);
 
   const refreshList = useCallback(async () => {
     try { setBundles(await repository.listPlans()); } catch (err) { setError(err instanceof Error ? err.message : "계획을 불러오지 못했습니다."); }
@@ -32,9 +43,10 @@ export default function PlannerApp() {
     finally { if (showLoading) setLoading(false); }
   }, []);
   useEffect(() => {
+    if (!authReady || (isCollaborationEnabled && !user)) return;
     const token = new URLSearchParams(window.location.search).get("plan");
     if (token) openToken(token); else refreshList().finally(() => setLoading(false));
-  }, [openToken, refreshList]);
+  }, [authReady, user?.id, openToken, refreshList]);
   useEffect(() => {
     if (!current) return;
     return repository.subscribe(current.plan.id, () => openToken(current.plan.shareToken, false));
@@ -48,12 +60,22 @@ export default function PlannerApp() {
     if (!bundle) refreshList();
   };
 
+  if (!authReady) return <main className="shell loading">로그인 상태를 확인하는 중입니다…</main>;
+  if (isCollaborationEnabled && !clientSupabase) return <main className="shell loading">로그인 환경 변수가 설정되지 않았습니다.</main>;
+  if (isCollaborationEnabled && !user) return <LoginScreen />;
   if (loading) return <main className="shell loading">이사 계획을 불러오는 중입니다…</main>;
   if (current) return <PlanView bundle={current} onBack={() => navigate(null)} onRefresh={() => openToken(current.plan.shareToken, false)} />;
-  return <Dashboard bundles={bundles} error={error} onOpen={(bundle) => navigate(bundle)} onCreated={(bundle) => { setBundles((all) => [bundle, ...all]); navigate(bundle); }} />;
+  return <Dashboard bundles={bundles} error={error} onLogout={async () => { await clientSupabase?.auth.signOut(); setBundles([]); setCurrent(null); setLoading(true); }} onOpen={(bundle) => navigate(bundle)} onCreated={(bundle) => { setBundles((all) => [bundle, ...all]); navigate(bundle); }} />;
 }
 
-function Dashboard({ bundles, error, onOpen, onCreated }: { bundles: PlanBundle[]; error: string; onOpen: (bundle: PlanBundle) => void; onCreated: (bundle: PlanBundle) => void }) {
+function LoginScreen() {
+  const [email, setEmail] = useState(""); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState("");
+  const emailLogin = async (event: FormEvent) => { event.preventDefault(); if (!clientSupabase) return; try { setBusy(true); setError(""); const { error } = await clientSupabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.href } }); if (error) throw error; setMessage("이메일로 로그인 링크를 보냈습니다. 받은 편지함을 확인해 주세요."); } catch (err) { setError(err instanceof Error ? err.message : "로그인 링크를 보내지 못했습니다."); } finally { setBusy(false); } };
+  const googleLogin = async () => { if (!clientSupabase) return; setBusy(true); setError(""); const { error } = await clientSupabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.href } }); if (error) { setError(error.message); setBusy(false); } };
+  return <main className="auth-shell"><section className="auth-card"><p className="eyebrow">함께 준비하는 이사</p><h1>이사 플래너</h1><p>로그인하면 어느 기기에서든 내 이사 계획을 확인할 수 있습니다.</p><button className="google-button" disabled={busy} onClick={googleLogin}>G&nbsp;&nbsp;Google로 계속하기</button><div className="auth-divider"><span>또는 이메일</span></div><form className="form" onSubmit={emailLogin}><label>이메일 주소<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="name@example.com" /></label><button className="primary" disabled={busy}>{busy ? "보내는 중…" : "이메일로 로그인 링크 받기"}</button></form>{message && <p className="notice">{message}</p>}{error && <p className="error">{error}</p>}</section></main>;
+}
+
+function Dashboard({ bundles, error, onLogout, onOpen, onCreated }: { bundles: PlanBundle[]; error: string; onLogout: () => void; onOpen: (bundle: PlanBundle) => void; onCreated: (bundle: PlanBundle) => void }) {
   const [showForm, setShowForm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
@@ -72,7 +94,7 @@ function Dashboard({ bundles, error, onOpen, onCreated }: { bundles: PlanBundle[
     }
   };
   return <main className="shell">
-    <header className="hero"><div><p className="eyebrow">함께 준비하는 이사</p><h1>이사 플래너</h1><p>이사일을 정하고, 모두의 준비를 한곳에서 확인하세요.</p></div><button className="primary" onClick={() => setShowForm(true)}>+ 새 이사 계획</button></header>
+    <header className="hero"><div><p className="eyebrow">함께 준비하는 이사</p><h1>이사 플래너</h1><p>이사일을 정하고, 모두의 준비를 한곳에서 확인하세요.</p></div><div className="header-actions"><button className="quiet" onClick={onLogout}>로그아웃</button><button className="primary" onClick={() => setShowForm(true)}>+ 새 이사 계획</button></div></header>
     {error && <p className="error">{error}</p>}
     <section className="card-grid">{bundles.map((bundle) => <PlanCard key={bundle.plan.id} bundle={bundle} onClick={() => onOpen(bundle)} />)}</section>
     {!bundles.length && <section className="empty"><span>📦</span><h2>첫 이사 계획을 만들어 보세요</h2><p>D-day를 기준으로 필요한 준비 항목을 자동으로 채워드립니다.</p></section>}
