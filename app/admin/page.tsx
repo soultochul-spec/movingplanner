@@ -1,0 +1,36 @@
+"use client";
+
+import { FormEvent, useState } from "react";
+
+type AdminPlan = { id: string; name: string; move_date: string; origin: string | null; destination: string | null; created_at: string; tasks: { count: number }[]; plan_members: { count: number }[] };
+
+export default function AdminPage() {
+  const [password, setPassword] = useState("");
+  const [plans, setPlans] = useState<AdminPlan[]>([]);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [deleteAll, setDeleteAll] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+
+  const request = async (method: "GET" | "DELETE", body?: object) => {
+    const response = await fetch("/api/admin/plans", { method, headers: { "Content-Type": "application/json", "x-admin-password": password }, body: body ? JSON.stringify(body) : undefined });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "요청을 처리하지 못했습니다.");
+    return data;
+  };
+  const loadPlans = async () => { const data = await request("GET"); setPlans(data.plans); setAuthenticated(true); };
+  const login = async (event: FormEvent) => { event.preventDefault(); try { setBusy(true); setError(""); await loadPlans(); } catch (err) { setError(err instanceof Error ? err.message : "로그인하지 못했습니다."); } finally { setBusy(false); } };
+  const removePlan = async (plan: AdminPlan) => {
+    if (!window.confirm(`“${plan.name}” 계획을 삭제할까요? 관련 할 일과 참여자도 함께 삭제됩니다.`)) return;
+    try { setBusy(true); setError(""); await request("DELETE", { id: plan.id, confirmation: "삭제" }); await loadPlans(); } catch (err) { setError(err instanceof Error ? err.message : "삭제하지 못했습니다."); } finally { setBusy(false); }
+  };
+  const removeAll = async () => {
+    if (confirmation !== "모든 계획 삭제") return;
+    try { setBusy(true); setError(""); await request("DELETE", { scope: "all", confirmation }); setPlans([]); setDeleteAll(false); setConfirmation(""); } catch (err) { setError(err instanceof Error ? err.message : "전체 삭제에 실패했습니다."); } finally { setBusy(false); }
+  };
+
+  if (!authenticated) return <main className="admin-shell"><section className="admin-login"><p className="eyebrow">Moving Planner</p><h1>관리자 모드</h1><p>Supabase에 저장된 이사 계획을 관리합니다.</p><form className="form" onSubmit={login}><label>관리자 비밀번호<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required autoFocus /></label>{error && <p className="error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "확인 중…" : "로그인"}</button></form><a href="/">← 이사 플래너로 돌아가기</a></section></main>;
+
+  return <main className="admin-shell"><header className="admin-header"><div><p className="eyebrow">Moving Planner</p><h1>저장된 계획 관리</h1><p>총 {plans.length}개의 계획이 Supabase에 저장되어 있습니다.</p></div><div className="header-actions"><a className="quiet" href="/">앱으로 돌아가기</a><button className="danger" disabled={busy || !plans.length} onClick={() => setDeleteAll(true)}>모든 계획 삭제</button></div></header>{error && <p className="error">{error}</p>}<section className="admin-list">{plans.map((plan) => <article className="admin-plan" key={plan.id}><div><h2>{plan.name}</h2><p>{plan.origin || "출발지 미입력"} → {plan.destination || "도착지 미입력"}</p><small>이사일 {plan.move_date} · 할 일 {plan.tasks?.[0]?.count || 0}개 · 참여자 {plan.plan_members?.[0]?.count || 0}명 · 생성 {new Date(plan.created_at).toLocaleString("ko-KR")}</small></div><button className="danger" disabled={busy} onClick={() => removePlan(plan)}>삭제</button></article>)}{!plans.length && <section className="empty"><span>✅</span><h2>저장된 계획이 없습니다</h2></section>}</section>{deleteAll && <div className="modal-backdrop"><section className="modal" role="dialog" aria-modal="true" aria-label="모든 계획 삭제"><div className="modal-header"><h2>모든 계획 삭제</h2><button className="close" onClick={() => setDeleteAll(false)}>×</button></div><p className="modal-copy">모든 계획과 관련 할 일, 참여자가 영구 삭제됩니다. 계속하려면 아래에 <b>모든 계획 삭제</b>를 입력하세요.</p><div className="form"><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoFocus /><div className="form-actions"><button className="quiet" onClick={() => setDeleteAll(false)}>취소</button><button className="danger" disabled={busy || confirmation !== "모든 계획 삭제"} onClick={removeAll}>{busy ? "삭제 중…" : "영구 삭제"}</button></div></div></section></div>}</main>;
+}
