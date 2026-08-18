@@ -62,7 +62,6 @@ function Dashboard({ bundles, error, onOpen, onCreated }: { bundles: PlanBundle[
   };
   return <main className="shell">
     <header className="hero"><div><p className="eyebrow">함께 준비하는 이사</p><h1>이사 플래너</h1><p>이사일을 정하고, 모두의 준비를 한곳에서 확인하세요.</p></div><button className="primary" onClick={() => setShowForm(true)}>+ 새 이사 계획</button></header>
-    {!isCollaborationEnabled && <p className="notice">현재 이 기기와 브라우저에서만 사용할 수 있는 로컬 모드입니다. 데이터는 이 브라우저에만 저장되며, 초대 링크·공동 편집은 비활성화되어 있습니다.</p>}
     {error && <p className="error">{error}</p>}
     <section className="card-grid">{bundles.map((bundle) => <PlanCard key={bundle.plan.id} bundle={bundle} onClick={() => onOpen(bundle)} />)}</section>
     {!bundles.length && <section className="empty"><span>📦</span><h2>첫 이사 계획을 만들어 보세요</h2><p>D-day를 기준으로 필요한 준비 항목을 자동으로 채워드립니다.</p></section>}
