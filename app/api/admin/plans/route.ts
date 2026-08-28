@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   try {
     const { data, error } = await requireServerSupabase()
       .from("move_plans")
-      .select("id,name,move_date,origin,destination,created_at,tasks(count),plan_members(id,display_name,created_at)")
+      .select("id,name,move_date,origin,destination,created_at,tasks(count),plan_members!plan_members_plan_id_fkey(id,display_name,created_at)")
       .order("created_at", { ascending: false });
     if (error) throw error;
     return NextResponse.json({ plans: data });

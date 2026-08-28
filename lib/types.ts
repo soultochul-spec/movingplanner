@@ -9,9 +9,12 @@ export type Plan = {
   destination?: string;
   shareToken: string;
   createdAt: string;
+  ownerId?: string;
+  representativeId?: string | null;
+  representativeReady?: boolean;
 };
 
-export type Member = { id: string; planId: string; displayName: string; sessionId: string };
+export type Member = { id: string; planId: string; displayName: string; sessionId: string; userId?: string | null };
 
 export type Task = {
   id: string;

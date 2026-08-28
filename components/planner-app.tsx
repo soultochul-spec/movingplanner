@@ -5,6 +5,7 @@ import { dueDate, formatDate } from "../lib/template";
 import { repository } from "../lib/repository";
 import { isCollaborationEnabled } from "../lib/collaboration";
 import { clientSupabase } from "../lib/client-supabase";
+import { memberPermissions } from "../lib/member-permissions.mjs";
 import type { User } from "@supabase/supabase-js";
 import type { Category, Member, Plan, PlanBundle, Priority, Task } from "../lib/types";
 
@@ -64,7 +65,7 @@ export default function PlannerApp() {
   if (isCollaborationEnabled && !clientSupabase) return <main className="shell loading">로그인 환경 변수가 설정되지 않았습니다.</main>;
   if (isCollaborationEnabled && !user) return <LoginScreen />;
   if (loading) return <main className="shell loading">이사 계획을 불러오는 중입니다…</main>;
-  if (current) return <PlanView bundle={current} onBack={() => navigate(null)} onRefresh={() => openToken(current.plan.shareToken, false)} />;
+  if (current) return <PlanView bundle={current} userId={user?.id} onBack={() => navigate(null)} onRefresh={async () => { setCurrent(await repository.getBundle(current.plan.shareToken)); }} />;
   return <Dashboard bundles={bundles} error={error} onLogout={async () => { await clientSupabase?.auth.signOut(); setBundles([]); setCurrent(null); setLoading(true); }} onOpen={(bundle) => navigate(bundle)} onCreated={(bundle) => { setBundles((all) => [bundle, ...all]); navigate(bundle); }} />;
 }
 
@@ -109,22 +110,36 @@ function PlanCard({ bundle, onClick }: { bundle: PlanBundle; onClick: () => void
   return <button className="plan-card" onClick={onClick}><div className="card-top"><span className="dday">{relativeText(day)}</span><span className="muted">{formatDate(bundle.plan.moveDate)}</span></div><h2>{bundle.plan.name}</h2><p>{bundle.plan.origin || "출발지 미입력"} <b>→</b> {bundle.plan.destination || "도착지 미입력"}</p><div className="progress"><i style={{ width: `${bundle.tasks.length ? complete / bundle.tasks.length * 100 : 0}%` }} /></div><div className="card-bottom"><span>{complete}/{bundle.tasks.length} 완료</span><span>{upcoming ? `다음: ${upcoming.title}` : "모든 항목 완료"}</span></div></button>;
 }
 
-function PlanView({ bundle, onBack, onRefresh }: { bundle: PlanBundle; onBack: () => void; onRefresh: () => void }) {
-  const [member, setMember] = useState<Member | null>(null);
+function PlanView({ bundle, userId, onBack, onRefresh }: { bundle: PlanBundle; userId?: string; onBack: () => void; onRefresh: () => Promise<void> }) {
+  const [localId, setLocalId] = useState<string>();
+  useEffect(() => { setLocalId(getSessionId()); }, []);
+  const actorId = isCollaborationEnabled ? userId : localId;
+  const permissions = memberPermissions(bundle.plan, bundle.members, actorId);
+  const member = permissions.current || (!bundle.plan.representativeReady ? bundle.members.find((item) => item.sessionId === localId) : undefined);
   const [showJoin, setShowJoin] = useState(false); const [showTask, setShowTask] = useState(false); const [editing, setEditing] = useState<Task | null>(null); const [editingPlan, setEditingPlan] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
+  const [operationError, setOperationError] = useState("");
   const [filter, setFilter] = useState("전체"); const [category, setCategory] = useState("전체"); const [busy, setBusy] = useState(false);
-  useEffect(() => { const storedId = localStorage.getItem(`moving-planner-member-${bundle.plan.id}`); const found = bundle.members.find((item) => item.id === storedId) || bundle.members.find((item) => item.sessionId === getSessionId()); setMember(found || null); setShowJoin(isCollaborationEnabled && !found); }, [bundle.plan.id, bundle.members]);
+  useEffect(() => { if (actorId) setShowJoin(!member); }, [actorId, member]);
   const visible = useMemo(() => bundle.tasks.filter((task) => (filter === "전체" || (filter === "완료" ? task.completed : !task.completed)) && (category === "전체" || task.category === category)).sort((a, b) => a.relativeDays - b.relativeDays), [bundle.tasks, filter, category]);
   const progress = bundle.tasks.length ? Math.round(bundle.tasks.filter((task) => task.completed).length / bundle.tasks.length * 100) : 0;
-  const save = async (action: () => Promise<void>) => { try { setBusy(true); await action(); onRefresh(); } finally { setBusy(false); } };
+  const save = async (action: () => Promise<void>) => {
+    if (busy) return false;
+    try { setBusy(true); setOperationError(""); await action(); await onRefresh(); return true; }
+    catch (err) { setOperationError(err instanceof Error ? err.message : "변경을 저장하지 못했습니다."); return false; }
+    finally { setBusy(false); }
+  };
   const copyLink = () => navigator.clipboard.writeText(window.location.href);
   return <main className="shell detail"><header className="detail-header"><button className="back" onClick={onBack}>← 모든 계획</button><div className="header-actions">{isCollaborationEnabled && <button className="quiet" onClick={copyLink}>🔗 초대 링크 복사</button>}<button className="quiet" onClick={() => setEditingPlan(true)}>계획 수정</button></div></header>
     <section className="plan-summary"><div><p className="eyebrow">{formatDate(bundle.plan.moveDate)} 이사</p><h1>{bundle.plan.name}</h1><p>{bundle.plan.origin || "출발지 미입력"} → {bundle.plan.destination || "도착지 미입력"}</p></div><div className="countdown"><strong>{relativeText(dDay(bundle.plan.moveDate))}</strong><span>이사까지</span></div></section>
     <section className="stats"><div><span>전체 진행률</span><strong>{progress}%</strong><div className="progress"><i style={{ width: `${progress}%` }} /></div></div><button className="member-stat" onClick={() => setShowMembers(true)}><span>참여자 · 관리</span><strong>{bundle.members.length}명</strong><p>{bundle.members.map((item) => item.displayName).join(" · ") || "사용자를 추가해 보세요"}</p></button><div><span>남은 할 일</span><strong>{bundle.tasks.filter((task) => !task.completed).length}개</strong><p>마감일 기준으로 정렬됩니다.</p></div></section>
     <section className="tasks"><div className="task-toolbar"><div><h2>준비 체크리스트</h2><p>체크하면 모두에게 바로 반영됩니다.</p></div><button className="primary" onClick={() => { setEditing(null); setShowTask(true); }}>+ 항목 추가</button></div><div className="filters"><select value={filter} onChange={(event) => setFilter(event.target.value)}><option>전체</option><option>예정</option><option>완료</option></select><select value={category} onChange={(event) => setCategory(event.target.value)}><option>전체</option>{categories.map((item) => <option key={item}>{item}</option>)}</select></div><div className="task-list">{visible.map((task) => <TaskRow key={task.id} task={task} plan={bundle.plan} members={bundle.members} disabled={busy} onToggle={() => save(() => repository.saveTask({ ...task, completed: !task.completed, completedBy: !task.completed ? member?.displayName || "이름 미등록" : undefined, completedAt: !task.completed ? new Date().toISOString() : undefined }, bundle.plan.shareToken))} onEdit={() => { setEditing(task); setShowTask(true); }} />)}</div></section>
-    {showJoin && isCollaborationEnabled && <JoinModal onJoin={(name) => save(async () => { const next = await repository.joinPlan(bundle.plan.id, name, getSessionId(), bundle.plan.shareToken); setMember(next); setShowJoin(false); })} />}
-    {showMembers && <MembersModal members={bundle.members} currentMemberId={member?.id} onClose={() => setShowMembers(false)} onAdd={(name) => save(async () => { const next = await repository.addMember(bundle.plan.id, name, bundle.plan.shareToken); if (!member) { localStorage.setItem(`moving-planner-member-${bundle.plan.id}`, next.id); setMember(next); } })} onSelect={(next) => { localStorage.setItem(`moving-planner-member-${bundle.plan.id}`, next.id); setMember(next); }} />}
+    {operationError && !showMembers && !showJoin && <p className="error" role="alert">{operationError}</p>}
+    {showJoin && <JoinModal busy={busy} error={operationError} onJoin={async (name) => { if (await save(async () => { await repository.joinPlan(bundle.plan.id, name, getSessionId(), bundle.plan.shareToken); })) setShowJoin(false); }} />}
+    {showMembers && <MembersModal members={bundle.members} plan={bundle.plan} actorId={actorId} busy={busy} error={operationError} onClose={() => setShowMembers(false)}
+      onAdd={(name) => save(async () => { await repository.addMember(bundle.plan.id, name, bundle.plan.shareToken); })}
+      onDelete={(target) => save(async () => { await repository.deleteMember(bundle.plan.id, target.id, bundle.plan.shareToken); })}
+      onAppoint={(target) => save(async () => { await repository.setRepresentative(bundle.plan.id, target.id, bundle.plan.shareToken); })} />}
     {showTask && <TaskModal task={editing} planId={bundle.plan.id} members={bundle.members} onClose={() => setShowTask(false)} onSave={(task) => save(async () => { if (editing) await repository.saveTask(task, bundle.plan.shareToken); else await repository.addTask(task, bundle.plan.shareToken); setShowTask(false); })} onDelete={editing ? () => save(async () => { await repository.deleteTask(editing, bundle.plan.shareToken); setShowTask(false); }) : undefined} />}
     {editingPlan && <PlanEditModal plan={bundle.plan} onClose={() => setEditingPlan(false)} onSave={(plan) => save(async () => { await repository.savePlan(plan); setEditingPlan(false); })} />}
   </main>;
@@ -141,14 +156,45 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   return <div className="modal-backdrop" role="presentation" onMouseDown={onClose}><section className="modal" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><div className="modal-header"><h2>{title}</h2><button className="close" onClick={onClose} aria-label="닫기">×</button></div>{children}</section></div>;
 }
 
-function JoinModal({ onJoin }: { onJoin: (name: string) => void }) {
+function JoinModal({ onJoin, busy, error }: { onJoin: (name: string) => void; busy: boolean; error: string }) {
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = String(new FormData(event.currentTarget).get("name")).trim(); if (name) onJoin(name); };
-  return <Modal title="함께 이사 준비하기" onClose={() => undefined}><p className="modal-copy">이 계획에서 사용할 이름을 입력해 주세요. 이후 누가 완료했는지 함께 확인할 수 있어요.</p><form className="form" onSubmit={submit}><label>표시 이름<input name="name" required maxLength={20} autoFocus placeholder="예: 지은" /></label><button className="primary" type="submit">참여하기</button></form></Modal>;
+  return <Modal title="함께 이사 준비하기" onClose={() => undefined}><p className="modal-copy">본인 이름을 등록해 주세요. 로그인 계정에 연결되며, 계획 작성자는 첫 대표가 됩니다. 기존에 이름만 등록했다면 본인 계정으로 다시 참여해 주세요.</p><form className="form" onSubmit={submit}><label>표시 이름<input name="name" required maxLength={20} disabled={busy} autoFocus placeholder="예: 지은" /></label>{error && <p className="error" role="alert">{error}</p>}<button className="primary" disabled={busy} type="submit">{busy ? "등록 중…" : "참여하기"}</button></form></Modal>;
 }
 
-function MembersModal({ members, currentMemberId, onClose, onAdd, onSelect }: { members: Member[]; currentMemberId?: string; onClose: () => void; onAdd: (name: string) => void; onSelect: (member: Member) => void }) {
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const name = String(new FormData(event.currentTarget).get("name")).trim(); if (name) { onAdd(name); event.currentTarget.reset(); } };
-  return <Modal title="참여자 관리" onClose={onClose}><p className="modal-copy">사용자 이름을 추가하고, 현재 이 브라우저에서 작업하는 사람을 선택하세요. 담당자 배정과 완료 기록에 사용됩니다.</p><div className="member-list">{members.map((item) => <button type="button" key={item.id} className={item.id === currentMemberId ? "member active" : "member"} onClick={() => onSelect(item)}><span>{item.displayName}</span>{item.id === currentMemberId && <b>현재 사용자</b>}</button>)}{!members.length && <p className="member-empty">아직 등록된 사용자가 없습니다.</p>}</div><form className="inline-form" onSubmit={submit}><input name="name" required maxLength={20} placeholder="추가할 사용자 이름" /><button className="primary" type="submit">추가</button></form></Modal>;
+function MembersModal({ members, plan, actorId, busy, error, onClose, onAdd, onDelete, onAppoint }: {
+  members: Member[]; plan: Plan; actorId?: string; busy: boolean; error: string; onClose: () => void;
+  onAdd: (name: string) => Promise<boolean>; onDelete: (member: Member) => Promise<boolean>; onAppoint: (member: Member) => Promise<boolean>;
+}) {
+  const permissions = memberPermissions(plan, members, actorId);
+  const [pending, setPending] = useState<{ action: "delete" | "representative"; member: Member } | null>(null);
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = event.currentTarget; const name = String(new FormData(form).get("name")).trim();
+    if (name && await onAdd(name)) form.reset();
+  };
+  const confirm = async () => {
+    if (!pending) return;
+    const success = await (pending.action === "delete" ? onDelete(pending.member) : onAppoint(pending.member));
+    if (success) setPending(null);
+  };
+  return <Modal title="참여자 관리" onClose={() => { if (!busy) onClose(); }}>
+    <p className="modal-copy">대표만 참여자를 삭제하거나 대표를 넘길 수 있습니다. 대표 권한은 이름 선택이 아닌 로그인 계정으로 확인합니다.</p>
+    {!plan.representativeReady && <p className="notice">대표 기능을 사용하려면 Supabase에서 대표 권한 DB 업데이트를 적용해야 합니다.</p>}
+    {plan.representativeReady && !permissions.representative && <p className="notice">대표 미지정 · 계획 작성자가 본인 이름으로 참여하거나 대표를 지정해 주세요.</p>}
+    <div className="member-list">{members.map((item) => <div key={item.id} className={item.id === permissions.current?.id ? "member active" : "member"}>
+      <div className="member-label"><span>{item.displayName}</span>{item.id === permissions.current?.id && <b>나</b>}{item.id === plan.representativeId && <b className="representative-badge">대표</b>}{!item.userId && <small>이름만 등록</small>}</div>
+      <div className="member-actions">
+        {permissions.canAppoint && item.userId && item.id !== plan.representativeId && <button className="quiet" disabled={busy || !!pending} onClick={() => setPending({ action: "representative", member: item })}>{plan.representativeId ? "대표 넘기기" : "대표로 지정"}</button>}
+        {permissions.isRepresentative && item.id !== plan.representativeId && <button className="danger" disabled={busy || !!pending} onClick={() => setPending({ action: "delete", member: item })}>삭제</button>}
+      </div>
+    </div>)}{!members.length && <p className="member-empty">아직 등록된 사용자가 없습니다.</p>}</div>
+    {pending && <section className="member-confirm" aria-label={pending.action === "delete" ? "참여자 삭제 확인" : "대표 변경 확인"}>
+      <p>{pending.action === "delete" ? `${pending.member.displayName}님을 삭제할까요? 담당자 배정만 해제되고 할 일과 완료 기록은 남습니다.` : `${pending.member.displayName}님을 대표로 지정할까요? 기존 대표의 삭제 권한은 즉시 해제됩니다.`}</p>
+      <div className="form-actions"><button className="quiet" disabled={busy} onClick={() => setPending(null)}>취소</button><button className={pending.action === "delete" ? "danger" : "primary"} disabled={busy} onClick={confirm}>{busy ? "처리 중…" : "확인"}</button></div>
+    </section>}
+    {error && <p className="error" role="alert">{error}</p>}
+    <form className="inline-form" onSubmit={submit}><input name="name" aria-label="추가할 사용자 이름" required maxLength={20} disabled={busy} placeholder="추가할 사용자 이름" /><button className="primary" disabled={busy} type="submit">추가</button></form>
+    <p className="modal-copy member-help">여기서 추가한 이름은 담당자 배정용입니다. 대표를 맡을 사람은 초대 링크에서 본인 계정으로 참여해 주세요. 참여자 삭제는 계정 차단이 아닙니다.</p>
+  </Modal>;
 }
 
 function TaskModal({ task, planId, members, onClose, onSave, onDelete }: { task: Task | null; planId: string; members: Member[]; onClose: () => void; onSave: (task: Task) => void; onDelete?: () => void }) {

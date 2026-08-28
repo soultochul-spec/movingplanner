@@ -16,14 +16,13 @@ export async function GET(request: NextRequest) {
     const token = request.nextUrl.searchParams.get("token");
     if (!token) {
       const db = requireServerSupabase();
-      const { data, error } = await db.from("move_plans").select("*,tasks(*),plan_members(*)").eq("owner_id", user.id).order("created_at", { ascending: false });
+      const { data, error } = await db.from("move_plans").select("*,tasks(*),plan_members!plan_members_plan_id_fkey(*)").eq("owner_id", user.id).order("created_at", { ascending: false });
       if (error) throw error;
       return NextResponse.json({ plans: (data || []).map(({ tasks, plan_members, ...plan }) => ({ plan, tasks: (tasks || []).sort((a: any, b: any) => a.relative_days - b.relative_days), members: (plan_members || []).sort((a: any, b: any) => a.created_at.localeCompare(b.created_at)) })) });
     }
     const plan = await planForToken(token);
     if (!plan) return NextResponse.json({ error: "계획을 찾을 수 없습니다." }, { status: 404 });
     const db = requireServerSupabase();
-    if (!plan.owner_id) { const { error } = await db.from("move_plans").update({ owner_id: user.id }).eq("id", plan.id).is("owner_id", null); if (error) throw error; plan.owner_id = user.id; }
     const [tasks, members] = await Promise.all([db.from("tasks").select("*").eq("plan_id", plan.id).order("relative_days"), db.from("plan_members").select("*").eq("plan_id", plan.id).order("created_at")]);
     if (tasks.error || members.error) throw tasks.error || members.error;
     return NextResponse.json({ plan, tasks: tasks.data, members: members.data });
