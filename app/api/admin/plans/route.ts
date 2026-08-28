@@ -1,14 +1,11 @@
-import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requireServerSupabase } from "../../../../lib/server-supabase";
+import { isAdminPassword } from "../../../../lib/admin-auth.mjs";
 
 function isAuthorized(request: NextRequest) {
   const expected = process.env.ADMIN_PASSWORD;
   const received = request.headers.get("x-admin-password");
-  if (!expected || !received) return false;
-  const expectedBuffer = Buffer.from(expected);
-  const receivedBuffer = Buffer.from(received);
-  return expectedBuffer.length === receivedBuffer.length && timingSafeEqual(expectedBuffer, receivedBuffer);
+  return isAdminPassword(expected, received);
 }
 
 export async function GET(request: NextRequest) {
@@ -16,7 +13,7 @@ export async function GET(request: NextRequest) {
   try {
     const { data, error } = await requireServerSupabase()
       .from("move_plans")
-      .select("id,name,move_date,origin,destination,created_at,tasks(count),plan_members(count)")
+      .select("id,name,move_date,origin,destination,created_at,tasks(count),plan_members(id,display_name,created_at)")
       .order("created_at", { ascending: false });
     if (error) throw error;
     return NextResponse.json({ plans: data });
